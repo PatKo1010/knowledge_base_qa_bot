@@ -1,0 +1,438 @@
+{
+  "description": "Evaluation set for the knowledge base Q&A bot. Positive cases should answer using only the expected source. Negative cases should return the fallback answer and no sources.",
+  "fallback_answer": "I cannot confirm from the knowledge base.",
+  "cases": [
+    {
+      "id": "account_change_email_core",
+      "type": "core_intent",
+      "intent": "change_email_address",
+      "query": "Can I change my email address?",
+      "expected_source": "account_help.md#change-email-address",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Customers can change their email address from Account Settings.",
+        "The new email must be verified before it becomes active."
+      ]
+    },
+    {
+      "id": "account_change_email_paraphrase_1",
+      "type": "paraphrase",
+      "intent": "change_email_address",
+      "query": "Where do users update the email on their account?",
+      "expected_source": "account_help.md#change-email-address",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Customers can change their email address from Account Settings.",
+        "The new email must be verified before it becomes active."
+      ]
+    },
+    {
+      "id": "account_change_email_paraphrase_2",
+      "type": "paraphrase",
+      "intent": "change_email_address",
+      "query": "Does a new email work immediately after I save it?",
+      "expected_source": "account_help.md#change-email-address",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "The customer must verify the new email address before it becomes active."
+      ]
+    },
+    {
+      "id": "account_reset_password_core",
+      "type": "core_intent",
+      "intent": "reset_password",
+      "query": "How do I reset my password?",
+      "expected_source": "account_help.md#reset-password",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Customers can reset their password from the sign-in page.",
+        "The reset link expires after 30 minutes."
+      ]
+    },
+    {
+      "id": "account_reset_password_paraphrase_1",
+      "type": "paraphrase",
+      "intent": "reset_password",
+      "query": "Where should a customer go if they forgot their password?",
+      "expected_source": "account_help.md#reset-password",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Customers can reset their password from the sign-in page."
+      ]
+    },
+    {
+      "id": "account_reset_password_paraphrase_2",
+      "type": "paraphrase",
+      "intent": "reset_password",
+      "query": "How long is a password reset link valid?",
+      "expected_source": "account_help.md#reset-password",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "The reset link expires after 30 minutes."
+      ]
+    },
+    {
+      "id": "account_delete_core",
+      "type": "core_intent",
+      "intent": "delete_account",
+      "query": "How can I delete my account?",
+      "expected_source": "account_help.md#delete-account",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Customers can request account deletion from Privacy Settings.",
+        "Deletion requests are completed within 14 days."
+      ]
+    },
+    {
+      "id": "account_delete_paraphrase_1",
+      "type": "paraphrase",
+      "intent": "delete_account",
+      "query": "Where do I submit a request to close my account?",
+      "expected_source": "account_help.md#delete-account",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Customers can request account deletion from Privacy Settings."
+      ]
+    },
+    {
+      "id": "account_delete_paraphrase_2",
+      "type": "paraphrase",
+      "intent": "delete_account",
+      "query": "How many days does account deletion take?",
+      "expected_source": "account_help.md#delete-account",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Deletion requests are completed within 14 days."
+      ]
+    },
+    {
+      "id": "shipping_standard_core",
+      "type": "core_intent",
+      "intent": "standard_shipping",
+      "query": "How long does standard shipping take?",
+      "expected_source": "shipping_faq.md#standard-shipping",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Standard shipping usually takes 3-5 business days after the order leaves the warehouse."
+      ]
+    },
+    {
+      "id": "shipping_standard_paraphrase_1",
+      "type": "paraphrase",
+      "intent": "standard_shipping",
+      "query": "When should a normal delivery arrive after it ships from the warehouse?",
+      "expected_source": "shipping_faq.md#standard-shipping",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Standard shipping usually takes 3-5 business days after the order leaves the warehouse."
+      ]
+    },
+    {
+      "id": "shipping_standard_paraphrase_2",
+      "type": "paraphrase",
+      "intent": "standard_shipping",
+      "query": "Is standard delivery measured from purchase date or warehouse departure?",
+      "expected_source": "shipping_faq.md#standard-shipping",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "The 3-5 business day estimate starts after the order leaves the warehouse."
+      ]
+    },
+    {
+      "id": "shipping_expedited_core",
+      "type": "core_intent",
+      "intent": "expedited_shipping",
+      "query": "How long does expedited shipping take?",
+      "expected_source": "shipping_faq.md#expedited-shipping",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Expedited shipping usually takes 1-2 business days.",
+        "Expedited shipping fees are not refundable after the package has shipped."
+      ]
+    },
+    {
+      "id": "shipping_expedited_paraphrase_1",
+      "type": "paraphrase",
+      "intent": "expedited_shipping",
+      "query": "What is the delivery estimate for rush shipping?",
+      "expected_source": "shipping_faq.md#expedited-shipping",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Expedited shipping usually takes 1-2 business days."
+      ]
+    },
+    {
+      "id": "shipping_expedited_paraphrase_2",
+      "type": "paraphrase",
+      "intent": "expedited_shipping",
+      "query": "Can I get the expedited shipping fee back after my package ships?",
+      "expected_source": "shipping_faq.md#expedited-shipping",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Expedited shipping fees are not refundable after the package has shipped."
+      ]
+    },
+    {
+      "id": "shipping_tracking_core",
+      "type": "core_intent",
+      "intent": "tracking_number",
+      "query": "When will I get a tracking number?",
+      "expected_source": "shipping_faq.md#tracking-number",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Customers receive a tracking number by email after the warehouse creates the shipping label."
+      ]
+    },
+    {
+      "id": "shipping_tracking_paraphrase_1",
+      "type": "paraphrase",
+      "intent": "tracking_number",
+      "query": "How are customers notified of shipment tracking?",
+      "expected_source": "shipping_faq.md#tracking-number",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Customers receive a tracking number by email."
+      ]
+    },
+    {
+      "id": "shipping_tracking_paraphrase_2",
+      "type": "paraphrase",
+      "intent": "tracking_number",
+      "query": "Does the tracking code come before or after the shipping label is created?",
+      "expected_source": "shipping_faq.md#tracking-number",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "The tracking number is sent after the warehouse creates the shipping label."
+      ]
+    },
+    {
+      "id": "refund_cancellation_core",
+      "type": "core_intent",
+      "intent": "cancellation_window",
+      "query": "How long do I have to cancel an order?",
+      "expected_source": "refund_policy.md#cancellation-window",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Customers can cancel an order within 24 hours after purchase if the order has not shipped yet.",
+        "After the order ships, customers must request a return instead of a cancellation."
+      ]
+    },
+    {
+      "id": "refund_cancellation_paraphrase_1",
+      "type": "paraphrase",
+      "intent": "cancellation_window",
+      "query": "Can a customer cancel after the package has already shipped?",
+      "expected_source": "refund_policy.md#cancellation-window",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "After the order ships, customers must request a return instead of a cancellation."
+      ]
+    },
+    {
+      "id": "refund_cancellation_paraphrase_2",
+      "type": "paraphrase",
+      "intent": "cancellation_window",
+      "query": "What is the cancellation deadline after buying something?",
+      "expected_source": "refund_policy.md#cancellation-window",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Customers can cancel an order within 24 hours after purchase if the order has not shipped yet."
+      ]
+    },
+    {
+      "id": "refund_timeline_core",
+      "type": "core_intent",
+      "intent": "refund_timeline",
+      "query": "How long do refunds take?",
+      "expected_source": "refund_policy.md#refund-timeline",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Approved refunds are processed within 5-7 business days.",
+        "The exact arrival time depends on the customer's bank or card provider."
+      ]
+    },
+    {
+      "id": "refund_timeline_paraphrase_1",
+      "type": "paraphrase",
+      "intent": "refund_timeline",
+      "query": "When should the money show up after a refund is approved?",
+      "expected_source": "refund_policy.md#refund-timeline",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Approved refunds are processed within 5-7 business days.",
+        "The exact arrival time depends on the customer's bank or card provider."
+      ]
+    },
+    {
+      "id": "refund_timeline_paraphrase_2",
+      "type": "paraphrase",
+      "intent": "refund_timeline",
+      "query": "Does my bank affect when I receive an approved refund?",
+      "expected_source": "refund_policy.md#refund-timeline",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "The exact arrival time depends on the customer's bank or card provider."
+      ]
+    },
+    {
+      "id": "refund_non_refundable_core",
+      "type": "core_intent",
+      "intent": "non_refundable_items",
+      "query": "Which items are not refundable?",
+      "expected_source": "refund_policy.md#non-refundable-items",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Digital gift cards, final sale items, and personalized products are not refundable unless required by local law."
+      ]
+    },
+    {
+      "id": "refund_non_refundable_paraphrase_1",
+      "type": "paraphrase",
+      "intent": "non_refundable_items",
+      "query": "Can I return a personalized product for a refund?",
+      "expected_source": "refund_policy.md#non-refundable-items",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Personalized products are not refundable unless required by local law."
+      ]
+    },
+    {
+      "id": "refund_non_refundable_paraphrase_2",
+      "type": "paraphrase",
+      "intent": "non_refundable_items",
+      "query": "Are digital gift cards refundable?",
+      "expected_source": "refund_policy.md#non-refundable-items",
+      "must_cite": true,
+      "expect_fallback": false,
+      "expected_facts": [
+        "Digital gift cards are not refundable unless required by local law."
+      ]
+    },
+    {
+      "id": "negative_restaurants_nearby",
+      "type": "negative",
+      "intent": "out_of_scope",
+      "query": "Which restaurants are nearby?",
+      "expected_source": null,
+      "must_cite": false,
+      "expect_fallback": true,
+      "expected_facts": []
+    },
+    {
+      "id": "negative_payment_methods",
+      "type": "negative",
+      "intent": "out_of_scope",
+      "query": "What payment methods do you accept?",
+      "expected_source": null,
+      "must_cite": false,
+      "expect_fallback": true,
+      "expected_facts": []
+    },
+    {
+      "id": "negative_international_shipping",
+      "type": "negative",
+      "intent": "out_of_scope_shipping",
+      "query": "Do you ship internationally?",
+      "expected_source": null,
+      "must_cite": false,
+      "expect_fallback": true,
+      "expected_facts": []
+    },
+    {
+      "id": "negative_shipping_cost",
+      "type": "negative",
+      "intent": "out_of_scope_shipping",
+      "query": "How much does standard shipping cost?",
+      "expected_source": null,
+      "must_cite": false,
+      "expect_fallback": true,
+      "expected_facts": []
+    },
+    {
+      "id": "negative_warranty_policy",
+      "type": "negative",
+      "intent": "out_of_scope_policy",
+      "query": "How long is the product warranty?",
+      "expected_source": null,
+      "must_cite": false,
+      "expect_fallback": true,
+      "expected_facts": []
+    },
+    {
+      "id": "negative_return_window",
+      "type": "negative",
+      "intent": "near_miss_return_policy",
+      "query": "How many days do I have to return an item?",
+      "expected_source": null,
+      "must_cite": false,
+      "expect_fallback": true,
+      "expected_facts": []
+    },
+    {
+      "id": "negative_change_shipping_address",
+      "type": "negative",
+      "intent": "near_miss_account_shipping",
+      "query": "Can I change my shipping address after ordering?",
+      "expected_source": null,
+      "must_cite": false,
+      "expect_fallback": true,
+      "expected_facts": []
+    },
+    {
+      "id": "negative_refund_before_approval",
+      "type": "negative",
+      "intent": "near_miss_refund_timeline",
+      "query": "How long does it take to approve a refund request?",
+      "expected_source": null,
+      "must_cite": false,
+      "expect_fallback": true,
+      "expected_facts": []
+    },
+    {
+      "id": "negative_account_reactivation",
+      "type": "negative",
+      "intent": "near_miss_account",
+      "query": "Can I reactivate my account after deletion?",
+      "expected_source": null,
+      "must_cite": false,
+      "expect_fallback": true,
+      "expected_facts": []
+    },
+    {
+      "id": "negative_coupon_code",
+      "type": "negative",
+      "intent": "out_of_scope_promotions",
+      "query": "Do you have a coupon code for my order?",
+      "expected_source": null,
+      "must_cite": false,
+      "expect_fallback": true,
+      "expected_facts": []
+    }
+  ]
+}
