@@ -3,6 +3,7 @@ import os
 
 from langchain.schema import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from openai import OpenAIError
 
 from . import indexer
 
@@ -136,11 +137,16 @@ def stream_query(question: str):
 
     yield sse_event("sources", {"sources": retrieval["sources"]})
 
-    for chunk in get_streaming_llm().stream([
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=build_prompt(question, retrieval["ranked_items"])),
-    ]):
-        if chunk.content:
-            yield sse_event("token", {"text": chunk.content})
+    try:
+        for chunk in get_streaming_llm().stream([
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=build_prompt(question, retrieval["ranked_items"])),
+        ]):
+            if chunk.content:
+                yield sse_event("token", {"text": chunk.content})
+    except OpenAIError as exc:
+        yield sse_event("error", {"message": f"OpenAI request failed: {exc}"})
+        yield sse_event("done", {})
+        return
 
     yield sse_event("done", {})

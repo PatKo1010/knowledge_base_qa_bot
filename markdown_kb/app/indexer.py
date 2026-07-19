@@ -6,8 +6,9 @@ import json
 from pathlib import Path
 
 
-DOCS_DIR = Path(__file__).resolve().parents[3] / "docs"
-INDEX_PATH = Path(__file__).resolve().parents[3] / ".kb" / "index.json"
+REPO_DIR = Path(__file__).resolve().parents[2]
+DOCS_DIR = REPO_DIR / "docs"
+INDEX_PATH = REPO_DIR / ".kb" / "index.json"
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 TOKEN_RE = re.compile(r"[a-z0-9]+")
 STOP_WORDS = {

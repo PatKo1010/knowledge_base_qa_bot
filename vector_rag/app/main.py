@@ -1,5 +1,9 @@
 from fastapi import FastAPI
 
+from .config import load_env_file
+
+load_env_file()
+
 from .indexer import load_vector_index
 from .routes import router
 
