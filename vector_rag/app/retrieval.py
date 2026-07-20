@@ -1,7 +1,9 @@
+import json
 import os
 
 from langchain.schema import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from openai import OpenAIError
 
 from . import indexer
 
@@ -20,6 +22,7 @@ SYSTEM_PROMPT = """
 """
 
 _llm = None
+_streaming_llm = None
 MAX_RETRIEVAL_DISTANCE = float(os.getenv("MAX_RETRIEVAL_DISTANCE", "0.8"))
 UNINDEXED_ANSWER = "The knowledge base has not been indexed yet. Call POST /index first."
 FALLBACK_ANSWER = "I cannot confirm from the knowledge base."
@@ -34,6 +37,22 @@ def get_llm():
             max_retries=1,
         )
     return _llm
+
+
+def get_streaming_llm():
+    global _streaming_llm
+    if _streaming_llm is None:
+        _streaming_llm = ChatOpenAI(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            streaming=True,
+            request_timeout=20,
+            max_retries=1,
+        )
+    return _streaming_llm
+
+
+def sse_event(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
 def build_prompt(query: str, ranked_chunks: list) -> str:
@@ -58,6 +77,14 @@ def build_sources(ranked_chunks: list) -> list[dict]:
     ]
 
 
+def filter_ranked_chunks(ranked_chunks: list) -> list:
+    return [
+        (doc, score)
+        for doc, score in ranked_chunks
+        if float(score) <= MAX_RETRIEVAL_DISTANCE
+    ]
+
+
 def retrieve_context(question: str, k: int = 3) -> dict:
     if indexer.vectorstore is None:
         return {
@@ -67,8 +94,8 @@ def retrieve_context(question: str, k: int = 3) -> dict:
             "sources": [],
         }
 
-    ranked_chunks = indexer.search(question, k=k)
-    if not ranked_chunks or ranked_chunks[0][1] > MAX_RETRIEVAL_DISTANCE:
+    ranked_chunks = filter_ranked_chunks(indexer.search(question, k=k))
+    if not ranked_chunks:
         return {
             "fallback": True,
             "answer": FALLBACK_ANSWER,
@@ -102,3 +129,29 @@ def query(question: str) -> dict:
         "answer": response.content,
         "sources": retrieval["sources"],
     }
+
+
+def stream_query(question: str):
+    retrieval = retrieve_context(question)
+
+    if retrieval["fallback"]:
+        yield sse_event("sources", {"sources": []})
+        yield sse_event("token", {"text": retrieval["answer"]})
+        yield sse_event("done", {})
+        return
+
+    yield sse_event("sources", {"sources": retrieval["sources"]})
+
+    try:
+        for chunk in get_streaming_llm().stream([
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=build_prompt(question, retrieval["ranked_items"])),
+        ]):
+            if chunk.content:
+                yield sse_event("token", {"text": chunk.content})
+    except OpenAIError as exc:
+        yield sse_event("error", {"message": f"OpenAI request failed: {exc}"})
+        yield sse_event("done", {})
+        return
+
+    yield sse_event("done", {})

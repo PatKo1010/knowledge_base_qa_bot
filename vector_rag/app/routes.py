@@ -1,8 +1,9 @@
 from fastapi import APIRouter
 from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
 
 from .indexer import build_index
-from .retrieval import query
+from .retrieval import query, stream_query
 from .schemas import ChatRequest, ChatResponse, IndexResponse
 
 router = APIRouter()
@@ -25,3 +26,15 @@ def index_docs():
 @router.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
     return query(req.query)
+
+
+@router.post("/chat/stream")
+def chat_stream(req: ChatRequest):
+    return StreamingResponse(
+        stream_query(req.query),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
