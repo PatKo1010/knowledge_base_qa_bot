@@ -22,6 +22,9 @@ dist/
 .env.*
 !.env.example
 
+# Local prompt/design notes
+PROMPT.md
+
 # Generated knowledge base indexes
 .kb/
 
