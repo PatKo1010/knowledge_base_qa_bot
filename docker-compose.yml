@@ -1,0 +1,44 @@
+services:
+  markdown-api:
+    build:
+      context: .
+      dockerfile: markdown_kb/Dockerfile
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      MIN_RETRIEVAL_SCORE: ${MIN_RETRIEVAL_SCORE:-1.0}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://${EC2_PUBLIC_HOST:-localhost}}
+    ports:
+      - "8000:8000"
+    volumes:
+      - kb-data:/app/../.kb
+
+  vector-api:
+    build:
+      context: .
+      dockerfile: vector_rag/Dockerfile
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      MAX_RETRIEVAL_DISTANCE: ${MAX_RETRIEVAL_DISTANCE:-0.8}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://${EC2_PUBLIC_HOST:-localhost}}
+    ports:
+      - "8001:8001"
+    volumes:
+      - kb-data:/app/../.kb
+
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+      args:
+        VITE_MARKDOWN_API_BASE_URL: http://${EC2_PUBLIC_HOST:-localhost}:8000
+        VITE_VECTOR_API_BASE_URL: http://${EC2_PUBLIC_HOST:-localhost}:8001
+    ports:
+      - "80:80"
+    depends_on:
+      - markdown-api
+      - vector-api
+
+volumes:
+  kb-data:
