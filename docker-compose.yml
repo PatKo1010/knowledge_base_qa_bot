@@ -1,44 +1,55 @@
 services:
-  markdown-api:
-    build:
-      context: .
-      dockerfile: markdown_kb/Dockerfile
-    environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
-      MIN_RETRIEVAL_SCORE: ${MIN_RETRIEVAL_SCORE:-1.0}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://${EC2_PUBLIC_HOST:-localhost}}
-    ports:
-      - "8000:8000"
-    volumes:
-      - kb-data:/app/../.kb
-
   vector-api:
     build:
       context: .
       dockerfile: vector_rag/Dockerfile
+    env_file:
+      - ./vector_rag/.env
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      DATABASE_URL: postgresql+psycopg://rag:rag@postgres:5432/rag
+      REDIS_URL: redis://redis:6379/0
+      HF_HOME: /.kb/huggingface
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
-      MAX_RETRIEVAL_DISTANCE: ${MAX_RETRIEVAL_DISTANCE:-0.8}
+      MAX_RETRIEVAL_DISTANCE: ${MAX_RETRIEVAL_DISTANCE:-1.0}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://${EC2_PUBLIC_HOST:-localhost}}
     ports:
       - "8001:8001"
     volumes:
       - kb-data:/app/../.kb
+      - ./docs:/docs
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+      POSTGRES_DB: rag
+    volumes:
+      - chat-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   ui:
     build:
       context: .
       dockerfile: ui/Dockerfile
       args:
-        VITE_MARKDOWN_API_BASE_URL: http://${EC2_PUBLIC_HOST:-localhost}:8000
         VITE_VECTOR_API_BASE_URL: http://${EC2_PUBLIC_HOST:-localhost}:8001
     ports:
       - "80:80"
     depends_on:
-      - markdown-api
       - vector-api
 
 volumes:
   kb-data:
+  chat-data:

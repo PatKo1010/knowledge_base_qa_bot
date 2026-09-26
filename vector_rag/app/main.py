@@ -9,6 +9,8 @@ load_env_file()
 
 from .indexer import load_vector_index
 from .routes import router
+from .chat_routes import router as chat_router
+from .conversations import get_repository
 
 DEFAULT_ALLOWED_ORIGINS = [
     "http://localhost:5173",
@@ -32,11 +34,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(router)
+app.include_router(chat_router)
 
 
 @app.on_event("startup")
 def load_persisted_index():
-    try:
-        load_vector_index()
-    except Exception as exc:
-        print(f"[vector_rag] Skipping persisted FAISS load: {exc}", flush=True)
+    # Fail startup if a saved index cannot be loaded; accepting writes would
+    # otherwise overwrite the registry of previously uploaded documents.
+    load_vector_index()
+    get_repository()

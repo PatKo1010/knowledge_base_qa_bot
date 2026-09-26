@@ -20,3 +20,12 @@ class SourceInfo(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: list[SourceInfo]
+
+
+class UploadResponse(BaseModel):
+    document_id: str
+    filename: str
+    pages: int
+    chunks_added: int
+    skipped_pages: list[int]
+    status: str

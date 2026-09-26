@@ -1,30 +1,32 @@
-# Knowledge Base Q&A Bot
+# Knowledge Base Chat
 
-This repo compares two ways to retrieve context from the same Markdown knowledge base before asking an LLM to answer:
+A conversational workspace built on the existing Vector RAG backend:
 
-- `markdown_kb`: parses Markdown into heading-based sections and retrieves context with keyword/BM25 scoring.
-- `vector_rag`: chunks Markdown, embeds chunks with OpenAI embeddings, and retrieves context with FAISS vector search.
-- `ui`: a shared React/Vite UI that sends the same question to both backends through `POST /chat/stream` and displays sources plus streamed answers side by side.
+- **Left:** durable conversation history ordered by creation time (newest first), search, and new conversations.
+- **Middle:** multi-turn chat with assistant replies on the left, user messages on the right, SSE streaming, and a stop control.
+- **Right:** every retrieved source for the selected response, including full chunk
+  text, document name, page, section, chunk index, and FAISS distance.
 
-The source documents live in `docs/*.md`.
+Select the source button on any earlier answer to inspect its references. The
+**Add a PDF** control uses the existing upload/indexing pipeline.
+
+`markdown_kb/` is retained as legacy code but is no longer started by Compose or
+used by the UI. Conversational chat follows `conversational_rag_v1_codex_instructions.md`:
+load six recent messages and the rolling summary, rewrite follow-up references,
+search the existing FAISS index for 20 candidates, apply the existing distance
+threshold, and rerank to at most five passages using the configured LLM.
+Reranking failures fall back to the first five vector results. The answer uses
+the original question and numbered citations derived from the selected passages.
+Click a citation or any answer's source button to inspect its source snapshots.
+The legacy stateless endpoints retain their original retrieval behavior.
+
+Compose includes optional Redis caching for recent messages. Cache keys include
+the durable message count so older cached turns cannot replace current memory;
+entries expire after 30 minutes. The rolling summary is read from SQL. If Redis
+is unavailable, reads fall back to SQL and chat continues. For local development,
+set `REDIS_URL` to enable the cache.
 
 ## Retrieval Flow
-
-### Markdown KB
-
-```text
-docs/*.md
-  -> parse by Markdown headings
-  -> build .kb/index.json
-  -> BM25 keyword retrieval
-  -> apply MIN_RETRIEVAL_SCORE
-  -> put selected sections into the prompt
-  -> stream grounded answer tokens
-```
-
-This strategy keeps the index inspectable. Each retrieved section maps directly to a Markdown heading and uses source IDs such as `refund_policy.md#refund-timeline`.
-
-Use this when you want simple debugging, transparent source selection, and predictable behavior over structured Markdown.
 
 ### Vector RAG
 
@@ -42,219 +44,241 @@ docs/*.md
 
 This strategy retrieves semantically similar chunks, which can help when user wording differs from the document wording. FAISS scores are distances here, so lower is better. Chunks with scores above `MAX_RETRIEVAL_DISTANCE` are excluded from both sources and prompt context.
 
-## API
+Inspect the active chunks, including their exact text and metadata, with:
 
-Both backends expose:
-
-```text
-GET  /health
-POST /index
-POST /chat
-POST /chat/stream
+```bash
+curl http://localhost:8001/chunks | jq
 ```
 
-`POST /chat/stream` returns Server-Sent Events:
+Each FAISS snapshot also stores the same manifest at `.kb/faiss_index/<generation>/chunks.json`.
+
+## Conversation API
 
 ```text
-event: sources
-data: {"sources": [...]}
+POST /api/v1/conversations
+GET  /api/v1/conversations?limit=50&offset=0
+GET  /api/v1/conversations/{id}
+GET  /api/v1/conversations/{id}/messages?limit=50&before=51
+POST /api/v1/chat
+POST /api/v1/chat/stream
+```
+
+Both chat endpoints accept `{"conversation_id": "uuid", "message": "..."}`.
+Omit `conversation_id` to create a conversation automatically. Messages are
+returned chronologically; `before` is an exclusive message sequence cursor.
+The UI loads older messages and additional conversations on demand.
+
+The streaming endpoint emits:
+
+```text
+event: conversation
+data: {"conversation_id": "..."}
+
+event: citations
+data: {"citations": [...]}
 
 event: token
 data: {"text": "..."}
 
-event: error
-data: {"message": "..."}
-
 event: done
-data: {}
+data: {"conversation_id": "...", "message_id": "...", "messages": [...]}
 ```
 
-## Local Setup
+`done` confirms the full user/assistant pair was saved in a single transaction.
+An `error` event ends a failed stream without `done`; partial answers are not
+saved as completed turns. Stopping or losing a connection before `done` leaves
+completion unconfirmed; reopen the conversation to check its durable history.
+Only one response per conversation runs at a time (otherwise HTTP 409).
 
-Create `.env` files:
+The answering model receives the latest six messages and a rolling summary.
+Every ten new messages, a background task updates the summary from the next
+unsummarized batch. Summary failures are logged and do not undo completed turns.
+Conversation memory provides dialogue context; retrieved documents remain the
+source of factual evidence. Source metadata is derived from retrieved chunks,
+not generated by the model.
+
+PostgreSQL is the durable store in Docker (`chat-data` volume). Without
+`DATABASE_URL`, local development uses `.kb/conversations.sqlite3`. Both use the
+same SQLAlchemy repository. The initial tables are created at startup; future
+schema changes will require migrations. Conversation data is independent of
+FAISS, so `/index` does not erase chat history or its saved source snapshots.
+This is a shared workspace; per-user accounts are not part of this phase.
+
+Existing vector endpoints remain available:
+
+```text
+GET  /health
+GET  /chunks
+POST /index
+POST /documents/upload
+POST /chat          # legacy stateless request: {"query": "..."}
+POST /chat/stream   # legacy stateless SSE: sources, token, done
+```
+
+## PDF Uploads (Vector RAG)
+
+Use **Add a PDF to Vector RAG** in the UI, or upload directly:
 
 ```bash
-cp markdown_kb/.env.example markdown_kb/.env 2>/dev/null || true
-cp vector_rag/.env.example vector_rag/.env 2>/dev/null || true
+curl -X POST http://localhost:8001/documents/upload \
+  -F "file=@/path/to/handbook.pdf"
 ```
 
-If those examples are not present, create these files manually:
+The request returns after extraction, embedding, and persistence succeed. The PDF
+is then available to `/chat` and `/chat/stream`; no separate `/index` call is needed.
+Uploads affect the Vector RAG knowledge base used by all conversations.
 
-```bash
-# markdown_kb/.env
-OPENAI_API_KEY="sk-..."
-OPENAI_MODEL="gpt-4o-mini"
-MIN_RETRIEVAL_SCORE="1.0"
-```
+- Supports PDFs with selectable text, up to 20 MB and 200 pages. Encrypted,
+  damaged, and entirely image-only PDFs are rejected. Scanned PDFs need OCR first.
+- Pages without extractable text are skipped and reported in `skipped_pages`.
+  Mixed scanned/text PDFs therefore may be only partially indexed. Complex tables
+  and multi-column layouts may not preserve their reading order during extraction.
+- PDF pipeline: Docling → Markdown → `MarkdownHeaderTextSplitter`
+  → token-aware overlapping chunks → OpenAI embeddings → FAISS.
+- Docling uses its standard PDF pipeline for layout and table recognition, with
+  CPU inference and OCR disabled. A lightweight pypdf check validates encryption
+  and page limits before conversion; Docling produces the Markdown.
+- Docling loads lazily on the first PDF upload. That upload may take longer while
+  inference models download. Docker stores the Hugging Face model cache at
+  `/.kb/huggingface` in the persistent volume. Model download/conversion failures
+  return an indexing error and leave the existing FAISS index intact.
+- Each page's Markdown is split on headings `#` through `######`, preserving
+  heading text and hierarchy metadata. PDF sections use a 100-token target with
+  10-token overlap. Tables and lists remain atomic and may exceed that target. Overlap stays within a
+  section; chunks do not cross page boundaries. Pages without detected headings
+  still pass through the recursive splitter. Markdown files retain their existing
+  500-character, zero-overlap section splitting.
+- Source IDs include filename, a document hash prefix, and physical page;
+  retrieved headings show the inferred hierarchy.
+- Uploading identical PDF contents reprocesses and replaces that document's existing
+  chunks, returning `status: "reindexed"`. Different contents, even with the same
+  filename, are separate documents.
+- Original PDFs, `document.md`, and `markdown_pages.json` are stored under
+  `.kb/vector_documents/<document_id>/`. The Markdown files can be inspected to
+  verify conversion quality. A copy is also exported to
+  `docs/pdf/<sanitized-filename>-<document-sha256>.md`, retaining page markers.
+  The hash prevents collisions between different PDFs with the same filename.
+  Generated exports are outside the `docs/*.md` scan to avoid duplicate chunks.
+- PDF uploads also write `chunks.json` under the same directory. It contains the
+  exact text and metadata for every embedded chunk, including `chunk_index`, page,
+  heading, source, and section metadata. Use it to inspect chunk boundaries after
+  upload.
+  Docker Compose mounts the host `./docs` directory into Vector RAG, so exports
+  appear in the local repository and survive container recreation.
+- `POST /index` replaces the FAISS index using top-level `docs/*.md` and
+  PDFs in `docs/pdf/`. PDFs use the same Docling Markdown conversion, chunking,
+  artifact persistence, and embedding pipeline as uploads. Identical PDF bytes
+  are indexed once; generated Markdown exports are excluded to avoid duplicates.
+  PDF chunk metadata uses consecutive zero-based `chunk_index` values across
+  all sections and pages of each PDF. Uploaded PDFs stored only in `.kb/` are
+  removed from the active index on rebuild; place their originals in `docs/pdf/`
+  to include them in rebuilds.
+- `.kb/faiss_index/current` points to an atomically published index snapshot.
+  Failed ingestion leaves the serving index intact; retries are safe. Previous
+  snapshots are retained, so disk usage grows with indexing operations. Failed
+  commits may leave unregistered document files, which rebuilds ignore.
+- Run **one Vector RAG worker**. Writes are serialized within that process; chat
+  uses the previous index until the new snapshot is ready. Use persistent storage
+  for the entire `.kb/` directory. Existing legacy FAISS indexes can still load.
+- Startup fails if a persisted index cannot be loaded, preventing new uploads
+  from overwriting an unreadable document registry. Restore the index or resolve
+  its configuration/dependency issue before restarting.
 
-```bash
-# vector_rag/.env
-OPENAI_API_KEY="sk-..."
-OPENAI_MODEL="gpt-4o-mini"
-MAX_RETRIEVAL_DISTANCE="0.8"
-```
+Embedding uses the backend's existing OpenAI configuration. Upload processing
+runs in a worker thread while the HTTP request waits; large-document job queues
+and OCR are outside this initial implementation.
 
-Install backend dependencies:
-
-```bash
-cd markdown_kb
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-
-cd ../vector_rag
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-```
-
-Install UI dependencies:
-
-```bash
-cd ../ui
-npm install
-```
-
-## Run Locally
-
-Start Markdown KB on port `8000`:
-
-```bash
-cd markdown_kb
-.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-Start Vector RAG on port `8001`:
+Offline ingestion tests stub Docling inference and use real PDF validation,
+Markdown splitting, and FAISS with local embeddings (no model downloads or OpenAI calls):
 
 ```bash
 cd vector_rag
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Run the same tests in Docker, including a real Docling conversion (downloads
+models on the first run):
+
+```bash
+docker compose --env-file vector_rag/.env run --rm --no-deps \
+  -v "$PWD/vector_rag/tests:/tests:ro" -e DOCLING_INTEGRATION=1 \
+  vector-api python -m unittest discover -s /tests -v
+```
+
+Docker is the verified Docling runtime. Native macOS installation may require
+compiling `docling-parse`; the current local Python 3.12 parser build failed.
+
+## Local Setup
+
+Create `vector_rag/.env` from `vector_rag/.env.example` and set `OPENAI_API_KEY`.
+
+```bash
+cd vector_rag
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8001
 ```
 
-Build indexes:
-
-```bash
-curl -X POST http://localhost:8000/index
-curl -X POST http://localhost:8001/index
-```
-
-Start the UI:
+In another terminal, start the UI:
 
 ```bash
 cd ui
+npm ci
 npm run dev
 ```
 
-Open:
+Open `http://localhost:5173`. The UI connects only to the vector backend at
+`http://localhost:8001`. Set `VITE_VECTOR_API_BASE_URL` for another backend URL.
 
-```text
-http://localhost:5173
-```
-
-The UI sends each submitted query to:
-
-```text
-http://localhost:8000/chat/stream
-http://localhost:8001/chat/stream
-```
-
-## Deployment
-
-Deploy three services:
-
-1. `markdown_kb` FastAPI service
-2. `vector_rag` FastAPI service
-3. `ui` static web app
-
-### Backend Deployment
-
-For each backend, deploy from its folder with Python dependencies installed from `requirements.txt`.
-
-Markdown KB command:
+## Docker Compose
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+docker compose up --build -d --remove-orphans
 ```
 
-Vector RAG command:
+This starts Vector RAG, PostgreSQL, Redis, and the UI (`http://localhost`). The
+`--remove-orphans` option removes the old Markdown service container if it is
+still running. It does not delete the legacy source directory or named volumes.
+PostgreSQL has its own persistent `chat-data` volume; `kb-data` continues to hold
+FAISS, original uploaded PDFs, and conversion artifacts. The host `./docs` is
+mounted into Vector RAG. PostgreSQL is accessible only inside the Compose network.
+The Compose database credentials are development defaults.
+
+Put PDFs to rebuild into `docs/pdf/`, then index:
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8001}
-```
-
-Set environment variables in the hosting platform:
-
-```bash
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o-mini
-```
-
-For Markdown KB, optionally set:
-
-```bash
-MIN_RETRIEVAL_SCORE=1.0
-```
-
-For Vector RAG, optionally set:
-
-```bash
-MAX_RETRIEVAL_DISTANCE=0.8
-```
-
-After deployment, call `/index` once for each backend. The generated indexes are written under `.kb/`. In production, use persistent disk/storage for `.kb/` if you want indexes to survive restarts. Otherwise, run `/index` during release/startup.
-
-### UI Deployment
-
-Build the UI with backend URLs configured:
-
-```bash
-cd ui
-VITE_MARKDOWN_API_BASE_URL=https://your-markdown-api.example.com \
-VITE_VECTOR_API_BASE_URL=https://your-vector-api.example.com \
-npm run build
-```
-
-Deploy `ui/dist/` to any static host.
-
-Make sure both backends allow the deployed UI origin in CORS. Locally, both services allow:
-
-```text
-http://localhost:5173
-http://127.0.0.1:5173
-```
-
-For production, add your deployed UI URL to the CORS `allow_origins` list in each backend.
-
-## Verification
-
-Health checks:
-
-```bash
-curl http://localhost:8000/health
-curl http://localhost:8001/health
-```
-
-Index checks:
-
-```bash
-curl -X POST http://localhost:8000/index
 curl -X POST http://localhost:8001/index
 ```
 
-Streaming checks:
+For deployment on another host, set `EC2_PUBLIC_HOST` before building the UI,
+or build it with `VITE_VECTOR_API_BASE_URL`. Set `ALLOWED_ORIGINS` to include the
+UI origin. Keep one Vector RAG worker, as required by the existing FAISS writer.
+For a separately managed database, set the backend `DATABASE_URL` to a
+`postgresql+psycopg://...` connection string. Preserve both database and vector
+storage across deployments.
+
+## Verification
 
 ```bash
-curl -N -X POST http://localhost:8000/chat/stream \
-  -H "Content-Type: application/json" \
-  -d '{"query": "How long do refunds take?"}'
-
-curl -N -X POST http://localhost:8001/chat/stream \
-  -H "Content-Type: application/json" \
-  -d '{"query": "How long do refunds take?"}'
+PYTHONPATH=vector_rag vector_rag/.venv/bin/python -m unittest discover -s vector_rag/tests -v
+node --test ui/tests/sse.test.mjs
+npm run build --prefix ui
+docker compose config --quiet
 ```
 
-Expected behavior:
+Offline tests exercise SQL persistence using SQLite, recent-message ordering,
+summary batches, citation integrity, stream failure/cancellation, and the existing
+PDF ingestion flow. They stub model inference and do not call OpenAI. The opt-in
+Docling test above covers real PDF conversion.
 
-- `sources` arrives first.
-- `token` events stream the answer.
-- `done` ends the stream.
-- If retrieval is weak, the service says it cannot confirm from the knowledge base.
-- If OpenAI fails, the service emits an `error` event and then `done`.
+```bash
+curl -N -X POST http://localhost:8001/api/v1/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{"message": "How long do refunds take?"}'
+
+curl http://localhost:8001/api/v1/conversations
+```
+
+Use the returned `conversation_id` on subsequent chat requests to continue the
+same conversation. If retrieval finds no supporting context, the existing
+knowledge-base fallback is streamed and saved.
