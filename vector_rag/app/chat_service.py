@@ -10,7 +10,7 @@ from langchain.schema import AIMessage, HumanMessage, SystemMessage
 from starlette.concurrency import run_in_threadpool
 
 from . import retrieval
-from .chat_pipeline import rewrite_query, LLMReranker
+from .chat_pipeline import rewrite_query, LLMReranker, REWRITE_PROMPT_VERSION
 from .chat_memory import recent_messages
 
 logger = logging.getLogger(__name__)
@@ -29,6 +29,7 @@ def citations_for(ranked_items):
             hashlib.sha256(source.split("#")[0].encode()).hexdigest(),
             document_name=meta.get("file", source.split("#")[0]),
             page=meta.get("page"), section=meta.get("heading"),
+            page_end=meta.get("page_end", meta.get("page")), pages=meta.get("pages"),
             chunk_index=meta.get("chunk_index"),
             chunk_id=hashlib.sha256(identity.encode()).hexdigest(),
             score=float(score), content=document.page_content,
@@ -62,10 +63,26 @@ async def stream_turn(repository, conversation, question):
         stage = time.monotonic()
         rewritten = await rewrite_query(question, recent, conversation["summary"])
         metrics["rewrite_latency_ms"] = round((time.monotonic() - stage) * 1000)
+        rewrite_used = bool(recent or conversation["summary"])
+        details = {
+            "original_question": question, "rewritten_query": rewritten,
+            "rewrite_status": "rewritten" if rewrite_used else "skipped_no_history",
+            "rewrite_model": retrieval.get_llm().model_name if rewrite_used else None,
+            "rewrite_prompt_version": REWRITE_PROMPT_VERSION,
+            "rewrite_latency_ms": metrics["rewrite_latency_ms"],
+            "recent_message_ids": [row["id"] for row in recent],
+            "summary": conversation["summary"],
+            "summary_through_sequence": conversation["summarized_count"],
+            "distance_threshold": retrieval.MAX_RETRIEVAL_DISTANCE,
+        }
         stage = time.monotonic()
         context = await run_in_threadpool(retrieval.retrieve_context, rewritten, k=20)
         metrics["retrieval_latency_ms"] = round((time.monotonic() - stage) * 1000)
         metrics["retrieved_chunk_count"] = len(context["ranked_items"])
+        details["retrieved_candidates"] = [
+            {"source": doc.metadata.get("source"), "chunk_index": doc.metadata.get("chunk_index"),
+             "score": float(score)} for doc, score in context["ranked_items"]
+        ]
         stage = time.monotonic()
         context["ranked_items"] = await LLMReranker().rerank(rewritten, context["ranked_items"], top_k=5)
         metrics["rerank_latency_ms"] = round((time.monotonic() - stage) * 1000)
@@ -87,7 +104,7 @@ async def stream_turn(repository, conversation, question):
         answer = "".join(parts)
         if not answer.strip():
             raise RuntimeError("Empty model response")
-        rows = await run_in_threadpool(repository.save_turn, conversation, question, answer, citations)
+        rows = await run_in_threadpool(repository.save_turn, conversation, question, answer, citations, details)
         metrics["generation_latency_ms"] = round((time.monotonic() - stage) * 1000)
         metrics["duration_ms"] = round((time.monotonic() - started) * 1000)
         logger.info("chat_completed %s", json.dumps(metrics))

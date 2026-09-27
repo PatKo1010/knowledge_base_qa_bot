@@ -16,6 +16,7 @@ services:
       - "8001:8001"
     volumes:
       - kb-data:/app/../.kb
+      - ./.kb/vector_documents:/.kb/vector_documents
       - ./docs:/docs
 
     depends_on:

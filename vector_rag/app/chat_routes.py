@@ -123,6 +123,7 @@ async def chat(req: ConversationChatRequest, background_tasks: BackgroundTasks,
                     background_tasks.add_task(update_summary, repository, conversation["id"])
                 answer = data["messages"][1]
                 return {"conversation_id": conversation["id"], "message_id": answer["id"],
-                        "answer": answer["content"], "citations": answer["citations"]}
+                        "answer": answer["content"], "citations": answer["citations"],
+                        "retrieval_details": answer["retrieval_details"]}
     finally:
         _active_conversations.discard(conversation["id"])

@@ -1165,3 +1165,9 @@ button:hover:not(:disabled) {
 .historyText strong { overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
 .historyText time { font-size: 10px; color: #78836e; }
 .inlineCitation { border: 0; border-radius: 4px; color: #2b5945; background: #e3ecd9; cursor: pointer; }
+.retrievalDetails { margin: 12px 0; padding: 14px; border: 1px solid #d7ddd8; border-radius: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.retrievalDetails summary { cursor: pointer; font-weight: 600; }
+.retrievalDetails dt { margin-top: 12px; font-weight: 600; }
+.retrievalDetails dd { margin: 4px 0 0; white-space: pre-wrap; }
+.retrievalDetails ol { padding-left: 20px; }
+.retrievalDetails li { margin: 8px 0; }

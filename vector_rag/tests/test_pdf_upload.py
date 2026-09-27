@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from langchain_core.embeddings import Embeddings
 from langchain.schema import Document
 
-from app.pdf_ingestion import chunk_documents, chunk_pages, token_count
+from app.pdf_ingestion import chunk_documents, chunk_pages, token_count, fix_taiwan_law_headings
 
 from app import indexer
 from app.routes import router
@@ -97,7 +97,7 @@ class PdfUploadTests(unittest.TestCase):
         return self.client.post("/documents/upload", files={"file": (filename, data, "application/pdf")})
 
     def test_search_duplicate_restart_and_rebuild(self):
-        data = pdf_bytes(["Refunds take seven days.", "", "Holiday allowance is twenty days."])
+        data = pdf_bytes(["# Refunds\nRefunds take seven days.", "", "# Holidays\nHoliday allowance is twenty days."])
         response = self.upload(data, "../../policy.pdf")
         self.assertEqual(response.status_code, 200, response.text)
         info = response.json()
@@ -225,6 +225,50 @@ class PdfUploadTests(unittest.TestCase):
         self.assertTrue(all(c.metadata["page"] == 4 for c in chunks))
         self.assertTrue(all(len(c.page_content) <= 1000 for c in chunks))
 
+    def test_heading_section_can_cross_pages(self):
+        pages = [Document(page_content=text, metadata={
+            "page": number, "heading": f"Page {number}", "source": f"policy.pdf#abc-page-{number}",
+        }) for number, text in [
+            (1, "# Policy\n\n## Refunds\n\nRefund requests are accepted."),
+            (2, "Submit your receipt.\n\n## Holidays\n\nTwenty days per year."),
+        ]]
+        chunks = chunk_pages(pages)
+        refund = next(c for c in chunks if c.metadata.get("header_2") == "Refunds")
+        self.assertIn("Submit your receipt.", refund.page_content)
+        self.assertEqual(refund.metadata["heading"], "Policy > Refunds")
+        self.assertEqual(refund.metadata["pages"], [1, 2])
+        self.assertEqual(refund.metadata["source"], "policy.pdf#abc-page-1-2")
+        holiday = next(c for c in chunks if c.metadata.get("header_2") == "Holidays")
+        self.assertEqual(holiday.metadata["pages"], [2])
+        self.assertNotIn("Submit your receipt.", holiday.page_content)
+        self.assertTrue(all("PDF_PAGE_" not in c.page_content for c in chunks))
+        self.assertTrue(all("_page_spans" not in c.metadata for c in chunks))
+
+    def test_long_cross_page_section_keeps_heading_and_actual_chunk_pages(self):
+        pages = [Document(page_content=text, metadata={
+            "page": number, "heading": f"Page {number}", "source": f"policy.pdf#abc-page-{number}",
+        }) for number, text in [
+            (1, "## Refunds\n\n" + "Refunds require receipts. " * 100),
+            (3, "Submit the application. " * 100),
+        ]]
+        chunks = chunk_pages(pages)
+        self.assertGreater(len(chunks), 2)
+        self.assertTrue(all(c.metadata["heading"] == "Refunds" for c in chunks))
+        self.assertTrue(all(c.metadata["section_index"] == 0 for c in chunks))
+        self.assertEqual(chunks[0].metadata["pages"], [1])
+        self.assertEqual(chunks[-1].metadata["pages"], [3])
+        self.assertTrue(any(c.metadata["pages"] == [1, 3] for c in chunks))
+        self.assertTrue(all(2 not in c.metadata["pages"] for c in chunks))
+
+    def test_document_without_headings_can_cross_pages(self):
+        pages = [Document(page_content=f"Text on page {number}.", metadata={
+            "page": number, "source": f"policy.pdf#abc-page-{number}", "heading": f"Page {number}",
+        }) for number in [1, 2]]
+        chunks = chunk_pages(pages)
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0].metadata["pages"], [1, 2])
+        self.assertEqual(chunks[0].metadata["heading"], "Document")
+
     def test_docling_headings_are_split_and_persisted(self):
         data = pdf_bytes(["# Company Policies\n\n## Refund Rules\n\nRefunds take seven days."
                           "\n\n## Holiday Rules\n\nHoliday allowance is twenty days."])
@@ -247,6 +291,51 @@ class PdfUploadTests(unittest.TestCase):
         self.assertEqual(indexer.documents_indexed, {})
         self.assertEqual(exports[0].read_text(), markdown)
         self.assertTrue((document_dir / "original.pdf").exists())
+
+    def test_taiwan_law_heading_normalization(self):
+        text = ("# 作業要點\n一、目的\n  十一、申請資格\n二十六、評審基準\n"
+                "## 二、既有標題\n（一）細項\n內文提到三、其他規定\n"
+                "| 四、表格內容 | 說明 |\n```text\n五、程式碼\n```\n"
+                "~~~\n六、範例\n~~~\n七、附則")
+        expected = text.replace("\n一、", "\n## 一、").replace(
+            "\n  十一、", "\n## 十一、").replace(
+            "\n二十六、", "\n## 二十六、").replace("\n七、", "\n## 七、")
+        self.assertEqual(fix_taiwan_law_headings(text), expected)
+        self.assertEqual(fix_taiwan_law_headings(expected), expected)
+
+    def test_taiwan_law_headings_are_persisted_and_chunked(self):
+        markdown = "# 作業要點\n\n- 一、目的\n\n支持文化發展。\n\n### 十一、評審基準\n\n依計畫內容評分。"
+        self.converter.convert.side_effect = lambda *args, **kwargs: SimpleNamespace(
+            status="success", document=SimpleNamespace(export_to_markdown=lambda **kwargs: markdown))
+        response = self.upload(pdf_bytes(["Law document"]))
+        self.assertEqual(response.status_code, 200, response.text)
+        artifact = indexer.DOCUMENTS_DIR / response.json()["document_id"]
+        self.assertIn("## 一、目的", (artifact / "document.md").read_text())
+        self.assertIn("\n## 十一、評審基準", (artifact / "document.md").read_text())
+        pages = json.loads((artifact / "markdown_pages.json").read_text())
+        self.assertIn("\n## 十一、評審基準", pages[0]["page_content"])
+        chunks = json.loads((artifact / "chunks.json").read_text())
+        headings = [c["metadata"].get("header_2") for c in chunks]
+        self.assertIn("一、目的", headings)
+        self.assertIn("十一、評審基準", headings)
+        self.assertTrue(all(c["metadata"]["page"] == 1 for c in chunks))
+
+    def test_taiwan_law_headings_with_docling_list_prefixes(self):
+        for prefix in ("- ", "* ", "+ ", "5. ", "19. ", "2) "):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(fix_taiwan_law_headings(prefix + "十一、評審基準"),
+                                 "## 十一、評審基準")
+        unchanged = "- （一）細項\n1. 一般清單\n### 其他標題\n```\n- 六、範例\n```"
+        self.assertEqual(fix_taiwan_law_headings(unchanged), unchanged)
+
+    def test_existing_chinese_numbered_headings_normalize_to_h2(self):
+        for level in range(1, 7):
+            text = "#" * level + " 十、違反本要點規定之處置"
+            expected = "## 十、違反本要點規定之處置"
+            self.assertEqual(fix_taiwan_law_headings(text), expected)
+            self.assertEqual(fix_taiwan_law_headings(expected), expected)
+        code = "```markdown\n### 十一、範例\n```"
+        self.assertEqual(fix_taiwan_law_headings(code), code)
 
     def test_docling_failure_does_not_publish_partial_content(self):
         self.converter.convert.side_effect = None

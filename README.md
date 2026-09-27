@@ -91,6 +91,15 @@ completion unconfirmed; reopen the conversation to check its durable history.
 Only one response per conversation runs at a time (otherwise HTTP 409).
 
 The answering model receives the latest six messages and a rolling summary.
+Completed answers also store a separate `retrieval_traces` record containing the
+original question, rewritten query, rewrite model/prompt version, summary snapshot
+and sequence, recent message IDs, distance threshold, and candidates before reranking.
+The Sources panel exposes this under **Retrieval details** after the answer completes.
+The trace is also returned as `retrieval_details` in message history and chat responses.
+It is diagnostic data, not conversation message text. Existing answers have no trace;
+the additive table is created at startup without rewriting existing messages.
+First-turn traces explicitly indicate that rewriting was skipped. Failed or cancelled
+turns retain the existing all-or-nothing behavior and do not save a trace.
 Every ten new messages, a background task updates the summary from the next
 unsummarized batch. Summary failures are logged and do not undo completed turns.
 Conversation memory provides dialogue context; retrieved documents remain the
@@ -138,18 +147,30 @@ Uploads affect the Vector RAG knowledge base used by all conversations.
 - Docling uses its standard PDF pipeline for layout and table recognition, with
   CPU inference and OCR disabled. A lightweight pypdf check validates encryption
   and page limits before conversion; Docling produces the Markdown.
+- Heading hierarchy inference is enabled, using PDF bookmarks, numbering, and
+  font styles. Parsed pages are retained to support style-based inference.
+- After PDF conversion, lines starting with Chinese-numbered items
+  such as `一、` or `十一、` are normalized to `##` headings before saving and
+  chunking, including existing H1–H6 headings. Other headings and fenced code are preserved. This heuristic
+  treats matching numbered prose as headings too.
+  Docling list prefixes such as `- 一、` and `5. 五、` are removed when promoting
+  these provisions to headings.
 - Docling loads lazily on the first PDF upload. That upload may take longer while
   inference models download. Docker stores the Hugging Face model cache at
   `/.kb/huggingface` in the persistent volume. Model download/conversion failures
   return an indexing error and leave the existing FAISS index intact.
-- Each page's Markdown is split on headings `#` through `######`, preserving
+- The whole PDF's Markdown is split on headings `#` through `######`, preserving
   heading text and hierarchy metadata. PDF sections use a 100-token target with
   10-token overlap. Tables and lists remain atomic and may exceed that target. Overlap stays within a
-  section; chunks do not cross page boundaries. Pages without detected headings
-  still pass through the recursive splitter. Markdown files retain their existing
-  500-character, zero-overlap section splitting.
+  section; chunks can cross page boundaries. Heading context continues across
+  pages until another heading changes it. Text without headings uses the same
+  token-aware splitter with `Document` as its fallback heading. Standalone Markdown
+  files use the shared chunker's 600-token target and 75-token overlap.
 - Source IDs include filename, a document hash prefix, and physical page;
   retrieved headings show the inferred hierarchy.
+  Cross-page chunks record `page` (first page), `page_end` (last page), and `pages`
+  (the exact contributing pages). Source IDs include the page range, and the UI
+  shows all contributing pages. Page tracking markers are excluded from embeddings.
 - Uploading identical PDF contents reprocesses and replaces that document's existing
   chunks, returning `status: "reindexed"`. Different contents, even with the same
   filename, are separate documents.
@@ -165,6 +186,13 @@ Uploads affect the Vector RAG knowledge base used by all conversations.
   upload.
   Docker Compose mounts the host `./docs` directory into Vector RAG, so exports
   appear in the local repository and survive container recreation.
+  It also bind-mounts `./.kb/vector_documents` to `/.kb/vector_documents`, so
+  all four artifacts are directly visible in the local project (and ignored by Git).
+  Before first switching an existing deployment to this mount, preserve its files
+  with `docker compose cp vector-api:/.kb/vector_documents ./.kb/vector_documents`
+  while the old container is running and the local destination does not yet exist.
+  Local file edits are visible in the container but do not automatically rebuild
+  embeddings; re-upload the PDF to regenerate artifacts and replace its index entries.
 - `POST /index` replaces the FAISS index using top-level `docs/*.md` and
   PDFs in `docs/pdf/`. PDFs use the same Docling Markdown conversion, chunking,
   artifact persistence, and embedding pipeline as uploads. Identical PDF bytes

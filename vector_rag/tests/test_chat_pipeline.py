@@ -43,7 +43,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(await LLMReranker().rerank("query", chunks), chunks[:5])
 
     async def test_original_question_answers_rewritten_query_retrieves(self):
-        conversation = dict(id="example", summary="Redis cache", message_count=0)
+        conversation = dict(id="example", summary="Redis cache", message_count=0, summarized_count=0)
         repository = SimpleNamespace(messages=lambda *args: [], save_turn=lambda *args: [{"id": "u"}, {"id": "a"}])
         chunk = (Document(page_content="Redis uses memory.", metadata={"source": "redis.md"}), 0.1)
         async def tokens(prompt):
@@ -51,6 +51,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("[1] Document: redis.md", prompt[-1].content)
             yield SimpleNamespace(content="Memory constraints [1].")
         with patch("app.chat_service.rewrite_query", new=AsyncMock(return_value="Redis limitations")), \
+             patch("app.chat_service.retrieval.get_llm", return_value=SimpleNamespace(model_name="test-model")), \
              patch("app.chat_service.retrieval.retrieve_context", return_value={"fallback": False, "ranked_items": [chunk]}) as retrieve, \
              patch("app.chat_service.retrieval.get_streaming_llm", return_value=SimpleNamespace(astream=tokens)):
             events = [item async for item in stream_turn(repository, conversation, "What are its limitations?")]

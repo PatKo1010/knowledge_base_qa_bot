@@ -7,6 +7,7 @@ from langchain.schema import HumanMessage, SystemMessage
 from . import retrieval
 
 logger = logging.getLogger(__name__)
+REWRITE_PROMPT_VERSION = "standalone-query-v1"
 
 
 async def rewrite_query(question, recent, summary):

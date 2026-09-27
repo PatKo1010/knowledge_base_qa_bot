@@ -33,6 +33,10 @@ class ConversationTests(unittest.TestCase):
         self.rewrite = patcher.start()
         self.rewrite.side_effect = lambda question, recent, summary: question
         self.addCleanup(patcher.stop)
+        patcher = patch("app.chat_service.retrieval.get_llm",
+                        return_value=SimpleNamespace(model_name="test-rewrite-model"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.context = {"fallback": False, "ranked_items": [(Document(
             page_content="Refunds take seven days.", metadata={"source": "policy.pdf#page-2",
             "file": "policy.pdf", "page": 2, "heading": "Refunds", "chunk_index": 4,
@@ -89,6 +93,50 @@ class ConversationTests(unittest.TestCase):
         prompt = self.llm.astream.call_args.args[0]
         self.assertEqual([item.content for item in prompt[2:-1]], [row["content"] for row in rows])
         self.retrieve.assert_called_once_with("Next", k=20)
+
+    def test_rewrite_trace_survives_restart_without_replacing_user_message(self):
+        conversation_id = self.create()
+        prior = self.repository.save_turn(self.repository.get(conversation_id), "Refund policy?", "Seven days.", [])
+        self.repository.save_summary(self.repository.get(conversation_id), 2, "Discussing refunds.")
+        self.rewrite.side_effect = lambda *args: "Refund application deadline"
+        result = self.client.post("/api/v1/chat", json={
+            "conversation_id": conversation_id, "message": "What deadline?"}).json()
+        trace = result["retrieval_details"]
+        self.assertEqual(trace["rewritten_query"], "Refund application deadline")
+        self.assertEqual(trace["original_question"], "What deadline?")
+        self.assertEqual(trace["recent_message_ids"], [row["id"] for row in prior])
+        self.assertEqual(trace["summary"], "Discussing refunds.")
+        self.assertEqual(trace["summary_through_sequence"], 2)
+        self.assertEqual(trace["rewrite_model"], "test-rewrite-model")
+        self.assertEqual(trace["retrieved_candidates"][0]["score"], 0.2)
+        self.retrieve.assert_called_once_with("Refund application deadline", k=20)
+        self.repository.save_summary(self.repository.get(conversation_id), 4, "A newer summary.")
+        fresh = ConversationRepository(self.url)
+        self.addCleanup(fresh.engine.dispose)
+        rows = fresh.messages(conversation_id)
+        self.assertEqual(rows[-2]["content"], "What deadline?")
+        self.assertIsNone(rows[-2]["retrieval_details"])
+        self.assertEqual(rows[-1]["retrieval_details"], trace)
+        prompt = self.llm.astream.call_args.args[0]
+        self.assertNotIn("Refund application deadline", "\n".join(m.content for m in prompt))
+
+    def test_first_turn_trace_records_rewrite_skipped(self):
+        result = self.client.post("/api/v1/chat", json={"message": "Hello"}).json()
+        trace = result["retrieval_details"]
+        self.assertEqual(trace["rewrite_status"], "skipped_no_history")
+        self.assertIsNone(trace["rewrite_model"])
+        self.assertEqual(trace["recent_message_ids"], [])
+
+    def test_existing_database_gets_trace_table_without_losing_messages(self):
+        from app.conversations import retrieval_traces
+        conversation_id = self.create()
+        self.repository.save_turn(self.repository.get(conversation_id), "Old question", "Old answer", [])
+        retrieval_traces.drop(self.repository.engine)
+        fresh = ConversationRepository(self.url)
+        self.addCleanup(fresh.engine.dispose)
+        rows = fresh.messages(conversation_id)
+        self.assertEqual([row["content"] for row in rows], ["Old question", "Old answer"])
+        self.assertTrue(all(row["retrieval_details"] is None for row in rows))
 
     def test_generation_or_retrieval_error_never_persists_partial_turn(self):
         conversation_id = self.create()

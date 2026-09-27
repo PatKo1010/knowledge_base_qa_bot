@@ -31,6 +31,11 @@ messages = Table(
     Column("created_at", String(40), nullable=False),
     UniqueConstraint("conversation_id", "sequence"),
 )
+retrieval_traces = Table(
+    "retrieval_traces", metadata,
+    Column("message_id", String(36), ForeignKey("messages.id"), primary_key=True),
+    Column("details", JSON, nullable=False),
+)
 
 
 class ConversationNotFoundError(Exception):
@@ -71,7 +76,9 @@ class ConversationRepository:
 
     def messages(self, conversation_id, limit=50, before=None):
         self.get(conversation_id)
-        statement = select(messages).where(messages.c.conversation_id == conversation_id)
+        statement = select(messages, retrieval_traces.c.details.label("retrieval_details")).outerjoin(
+            retrieval_traces, messages.c.id == retrieval_traces.c.message_id
+        ).where(messages.c.conversation_id == conversation_id)
         if before is not None:
             statement = statement.where(messages.c.sequence < before)
         with self.engine.connect() as connection:
@@ -79,7 +86,7 @@ class ConversationRepository:
                                       .limit(limit)).mappings().all()
         return [dict(row) for row in reversed(rows)]
 
-    def save_turn(self, conversation, question, answer, citations):
+    def save_turn(self, conversation, question, answer, citations, retrieval_details=None):
         now = datetime.now(timezone.utc).isoformat()
         count = conversation["message_count"]
         rows = [dict(id=str(uuid4()), conversation_id=conversation["id"],
@@ -94,6 +101,11 @@ class ConversationRepository:
             if result.rowcount != 1:
                 raise ConversationConflictError("Conversation changed during generation")
             connection.execute(insert(messages), rows)
+            if retrieval_details is not None:
+                connection.execute(insert(retrieval_traces).values(
+                    message_id=rows[1]["id"], details=retrieval_details))
+        rows[0]["retrieval_details"] = None
+        rows[1]["retrieval_details"] = retrieval_details
         return rows
 
     def summary_input(self, conversation_id):
