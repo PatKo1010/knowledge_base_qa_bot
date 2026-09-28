@@ -25,7 +25,7 @@ INDEX_DIR = REPO_DIR / ".kb" / "faiss_index"
 DOCUMENTS_DIR = REPO_DIR / ".kb" / "vector_documents"
 _WRITE_LOCK = threading.RLock()
 documents_indexed: dict = {}
-EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_MODEL = "text-embedding-3-large"
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 
 vectorstore: FAISS | None = None
@@ -68,7 +68,7 @@ def chunk_manifest(store: FAISS | None = None) -> list[dict]:
 
 def load_markdown_sections(path: Path) -> list[Document]:
     documents: list[Document] = []
-    heading_stack: list[str] = []
+    heading_stack: dict[int, str] = {}
     current_heading: str | None = None
     current_path = ""
     current_lines: list[str] = []
@@ -81,10 +81,10 @@ def load_markdown_sections(path: Path) -> list[Document]:
             return
         documents.append(
             Document(
-                page_content=f"{current_path}\n\n{content}",
+                page_content=content,
                 metadata={
                     "source": f"{path.name}#{slugify(current_heading)}",
-                    "heading": current_path,
+                    "heading1": current_path,
                     "file": path.name,
                 },
             )
@@ -96,10 +96,11 @@ def load_markdown_sections(path: Path) -> list[Document]:
             flush_section()
             level = len(heading_match.group(1))
             heading = heading_match.group(2).strip()
-            del heading_stack[level - 1 :]
-            heading_stack.append(heading)
+            heading_stack = {depth: title for depth, title in heading_stack.items()
+                             if depth < level}
+            heading_stack[level] = heading
             current_heading = heading
-            current_path = " > ".join(heading_stack)
+            current_path = heading_stack.get(2, heading)
             current_lines = []
         else:
             current_lines.append(line)

@@ -14,7 +14,7 @@ from langchain.text_splitter import MarkdownHeaderTextSplitter
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_PAGES = 200
 MAX_TEXT_CHARS = 2_000_000
-PDF_PIPELINE_VERSION = "docling-markdown-v2"
+PDF_PIPELINE_VERSION = "docling-markdown-v5"
 CHUNK_TARGET_TOKENS = 600
 CHUNK_OVERLAP_TOKENS = 75
 
@@ -26,6 +26,7 @@ _LIST_LINE_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)")
 _SENTENCE_RE = re.compile(r"(?<=[。！？；])(?:\s+|(?=[^\s]))|(?<=[.!?;])\s+")
 _TOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
 _LAW_HEADING_RE = re.compile(r"^[一二三四五六七八九十百千零〇]+、\s*\S")
+_LAW_ITEM_RE = re.compile(r"^(?:（[一二三四五六七八九十百千零〇]+）|\([一二三四五六七八九十百千零〇]+\))")
 
 
 def fix_taiwan_law_headings(text: str) -> str:
@@ -49,6 +50,9 @@ def fix_taiwan_law_headings(text: str) -> str:
         candidate = re.sub(r"^#{1,6}\s+", "", candidate, count=1)
         if not fence_char and _LAW_HEADING_RE.match(candidate):
             lines.append(f"## {candidate}")
+        elif not fence_char and _LAW_ITEM_RE.match(candidate):
+            indent = line[:len(line) - len(line.lstrip())]
+            lines.append(f"{indent}- {candidate}")
         else:
             lines.append(line)
     return "\n".join(lines)
@@ -83,25 +87,101 @@ def _markdown_units(text: str) -> list[str]:
     return units
 
 
+def _item_units(text: str, max_tokens: int = 8000) -> list[tuple[str, bool]]:
+    """Keep each Chinese-numbered item, including continuation paragraphs, isolated."""
+    units = []
+    start = 0
+    item_indent = None
+    fence_char = ""
+    fence_length = 0
+    offset = 0
+
+    def emit(end: int) -> None:
+        block = text[start:end].strip()
+        if not block:
+            return
+        if item_indent is None:
+            units.extend((unit, False) for unit in _markdown_units(block))
+        else:
+            # Stay below the embedding input limit, preserving Unicode and exact
+            # substrings so physical-page offsets remain valid.
+            while token_count(block) > max_tokens:
+                low, high = 1, len(block)
+                while low < high:
+                    mid = (low + high + 1) // 2
+                    if token_count(block[:mid]) <= max_tokens:
+                        low = mid
+                    else:
+                        high = mid - 1
+                units.append((block[:low], True))
+                block = block[low:]
+            if block:
+                units.append((block, True))
+
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        fence = re.match(r"^(`{3,}|~{3,})(.*)$", stripped)
+        if fence:
+            marker, suffix = fence.groups()
+            if not fence_char:
+                fence_char, fence_length = marker[0], len(marker)
+            elif marker[0] == fence_char and len(marker) >= fence_length and not suffix.strip():
+                fence_char = ""
+        elif not fence_char:
+            candidate = _LIST_LINE_RE.sub("", stripped, count=1)
+            indent = len(line) - len(line.lstrip())
+            is_item = bool(_LAW_ITEM_RE.match(candidate))
+            is_heading = bool(re.match(r"^#{1,6}\s+", stripped))
+            if is_heading or (is_item and (item_indent is None or indent <= item_indent)):
+                emit(offset)
+                start = offset
+                item_indent = indent if is_item else None
+        offset += len(line)
+    emit(len(text))
+    return units
+
+
 def chunk_documents(documents: list[Document], target_tokens: int = CHUNK_TARGET_TOKENS,
                     overlap_target_tokens: int = CHUNK_OVERLAP_TOKENS) -> list[Document]:
     """Chunk Markdown sections by tokens without breaking tables or lists."""
     chunks: list[Document] = []
     for section_index, document in enumerate(documents):
-        units = _markdown_units(document.page_content)
+        metadata_base = {key: value for key, value in document.metadata.items()
+                         if key != "_page_spans"}
+        headers = {key: metadata_base.pop(key) for key in list(metadata_base)
+                   if re.fullmatch(r"header_[1-6]", key)}
+        heading = metadata_base.pop("heading", "Document")
+        heading = metadata_base.get("heading1", heading)
+        if headers:
+            heading = headers["header_2"] if "header_2" in headers else headers[max(headers)]
+        metadata_base["heading1"] = heading
+        prefix = f"章節：{heading}\n"
+        prefix_tokens = token_count(prefix)
+        # Reserve space for the title in the actual embedding input.
+        if prefix_tokens >= 8000:
+            raise ValueError("Section heading is too long to embed.")
+        body_budget = max(1, target_tokens - prefix_tokens)
+        units = _item_units(document.page_content, max_tokens=8000 - prefix_tokens)
         section_chunks: list[list[tuple[str, list[int]]]] = []
         current: list[tuple[str, list[int]]] = []
         current_tokens = 0
         cursor = 0
         page_spans = document.metadata.get("_page_spans", [])
 
-        for unit in units:
+        for unit, isolated in units:
             start = document.page_content.index(unit, cursor)
             cursor = start + len(unit)
             unit_pages = sorted({page for left, right, page in page_spans
                                  if left < cursor and right > start})
             unit_tokens = token_count(unit)
-            if current and current_tokens + unit_tokens > target_tokens:
+            if isolated:
+                if current:
+                    section_chunks.append(current)
+                section_chunks.append([(unit, unit_pages)])
+                current = []
+                current_tokens = 0
+                continue
+            if current and current_tokens + unit_tokens > body_budget:
                 section_chunks.append(current)
                 overlap: list[tuple[str, list[int]]] = []
                 current_overlap_tokens = 0
@@ -123,7 +203,7 @@ def chunk_documents(documents: list[Document], target_tokens: int = CHUNK_TARGET
         for chunk_units in section_chunks:
             content = "\n\n".join(unit for unit, _ in chunk_units)
             metadata = {
-                **{key: value for key, value in document.metadata.items() if key != "_page_spans"},
+                **metadata_base,
                 "section_index": section_index,
                 "chunk_index": len(chunks),
             }
@@ -135,7 +215,7 @@ def chunk_documents(documents: list[Document], target_tokens: int = CHUNK_TARGET
                 if len(chunk_pages) > 1:
                     suffix += f"-{chunk_pages[-1]}"
                 metadata["source"] = f"{source_base}-page-{suffix}"
-            chunks.append(Document(page_content=content, metadata=metadata))
+            chunks.append(Document(page_content=prefix + content, metadata=metadata))
     return chunks
 
 

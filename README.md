@@ -155,19 +155,36 @@ Uploads affect the Vector RAG knowledge base used by all conversations.
   treats matching numbered prose as headings too.
   Docling list prefixes such as `- 一、` and `5. 五、` are removed when promoting
   these provisions to headings.
+- Chinese parenthesized items such as `（一）`, `（二）`, and `(三)` at the start
+  of a line are normalized to Markdown list items, including items Docling marked
+  as headings. Each item forms its own chunk, including continuation paragraphs,
+  ordinary child lists, and cross-page continuation text, until the next item or
+  heading. Items retain heading and physical-page metadata and are not merged or
+  overlapped with neighboring chunks. Fenced code and table rows are not normalized.
+  These items may exceed the usual 100-token target; large items are split into
+  smaller parts with room for the heading within the 8,000-token embedding budget.
+  Re-upload existing PDFs or rebuild their index to apply this `docling-markdown-v5` behavior.
 - Docling loads lazily on the first PDF upload. That upload may take longer while
   inference models download. Docker stores the Hugging Face model cache at
   `/.kb/huggingface` in the persistent volume. Model download/conversion failures
   return an indexing error and leave the existing FAISS index intact.
 - The whole PDF's Markdown is split on headings `#` through `######`, preserving
-  heading text and hierarchy metadata. PDF sections use a 100-token target with
+  heading text. Each chunk stores its enclosing `##` title as `heading1`, without
+  an ancestor path or additional `heading` / `header_*` metadata. When no `##` exists,
+  the nearest available heading is used. PDF sections use a 100-token target with
   10-token overlap. Tables and lists remain atomic and may exceed that target. Overlap stays within a
   section; chunks can cross page boundaries. Heading context continues across
   pages until another heading changes it. Text without headings uses the same
   token-aware splitter with `Document` as its fallback heading. Standalone Markdown
   files use the shared chunker's 600-token target and 75-token overlap.
+- Every chunk's embedding text starts with `章節：<heading1>` followed by a newline
+  and the chunk body. This exact text is saved in FAISS, `/chunks`, and PDF
+  `chunks.json` artifacts and used during retrieval. Token targets reserve space
+  for the title; physical-page citations still refer to the original body text.
+  Source responses keep their existing `heading` / `section` fields, populated
+  from `heading1`, with support for older indexes using `heading`.
 - Source IDs include filename, a document hash prefix, and physical page;
-  retrieved headings show the inferred hierarchy.
+  retrieved headings show a single title, preferring the enclosing `##`.
   Cross-page chunks record `page` (first page), `page_end` (last page), and `pages`
   (the exact contributing pages). Source IDs include the page range, and the UI
   shows all contributing pages. Page tracking markers are excluded from embeddings.
@@ -212,7 +229,23 @@ Uploads affect the Vector RAG knowledge base used by all conversations.
   from overwriting an unreadable document registry. Restore the index or resolve
   its configuration/dependency issue before restarting.
 
-Embedding uses the backend's existing OpenAI configuration. Upload processing
+Embedding uses `text-embedding-3-large` through the backend's existing OpenAI
+configuration and `OPENAI_API_KEY`. Existing indexes built with
+`text-embedding-3-small` must be rebuilt before the backend can start.
+For Docker, first ensure all source documents are in `docs/*.md` or `docs/pdf/`
+(including originals of uploaded PDFs you want to retain), then run:
+
+```bash
+docker compose stop vector-api
+docker compose build vector-api
+docker compose run --rm --no-deps vector-api python -c 'from app.indexer import build_index; build_index()'
+docker compose up -d vector-api
+```
+
+Rebuilding calls the embedding API and publishes a new index snapshot; previous
+snapshots and conversation history remain stored.
+
+Upload processing
 runs in a worker thread while the HTTP request waits; large-document job queues
 and OCR are outside this initial implementation.
 

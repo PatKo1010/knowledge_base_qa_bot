@@ -28,7 +28,7 @@ def citations_for(ranked_items):
             index=len(citations) + 1, source=source, document_id=meta.get("document_id") or
             hashlib.sha256(source.split("#")[0].encode()).hexdigest(),
             document_name=meta.get("file", source.split("#")[0]),
-            page=meta.get("page"), section=meta.get("heading"),
+            page=meta.get("page"), section=meta.get("heading1", meta.get("heading")),
             page_end=meta.get("page_end", meta.get("page")), pages=meta.get("pages"),
             chunk_index=meta.get("chunk_index"),
             chunk_id=hashlib.sha256(identity.encode()).hexdigest(),

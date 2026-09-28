@@ -35,5 +35,5 @@ class DoclingLiveTests(unittest.TestCase):
         self.assertIn("twenty days", pages[1].page_content)
         chunks = chunk_pages(pages)
         self.assertEqual({chunk.metadata["page"] for chunk in chunks}, {1, 2})
-        self.assertTrue(any("header_1" in chunk.metadata or "header_2" in chunk.metadata for chunk in chunks))
+        self.assertTrue(any("heading1" in chunk.metadata for chunk in chunks))
         self.assertTrue(all(chunk.metadata["pipeline_version"] == "docling-markdown-v2" for chunk in chunks))

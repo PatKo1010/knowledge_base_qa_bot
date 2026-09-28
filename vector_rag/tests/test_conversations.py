@@ -39,7 +39,7 @@ class ConversationTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.context = {"fallback": False, "ranked_items": [(Document(
             page_content="Refunds take seven days.", metadata={"source": "policy.pdf#page-2",
-            "file": "policy.pdf", "page": 2, "heading": "Refunds", "chunk_index": 4,
+            "file": "policy.pdf", "page": 2, "heading1": "Refunds", "chunk_index": 4,
             "document_id": "document-1"}), 0.2)], "sources": []}
         patcher = patch("app.chat_service.retrieval.retrieve_context", return_value=self.context)
         self.retrieve = patcher.start()
@@ -71,6 +71,7 @@ class ConversationTests(unittest.TestCase):
         self.assertEqual([row["role"] for row in rows], ["user", "assistant"])
         self.assertEqual(rows[1]["content"], "Seven days [policy.pdf#page-2].")
         citation = rows[1]["citations"][0]
+        self.assertEqual(citation["section"], "Refunds")
         self.assertEqual((citation["page"], citation["chunk_index"], citation["content"]),
                          (2, 4, "Refunds take seven days."))
         fresh = ConversationRepository(self.url)

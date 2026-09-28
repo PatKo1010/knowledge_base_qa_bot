@@ -204,7 +204,7 @@ class PdfUploadTests(unittest.TestCase):
         legacy = self.root / "legacy"
         indexer.vectorstore.save_local(str(legacy))
         (legacy / "metadata.json").write_text(
-            '{"embedding_model":"text-embedding-3-small","files_indexed":1,"sections_indexed":1}')
+            json.dumps({"embedding_model": indexer.EMBEDDING_MODEL, "files_indexed": 1, "sections_indexed": 1}))
         indexer.load_vector_index(legacy)
         self.assertEqual(indexer.sections_indexed, 1)
         self.assertEqual(indexer.documents_indexed, {})
@@ -216,12 +216,12 @@ class PdfUploadTests(unittest.TestCase):
             + "\n\n## Holidays\n\nHoliday allowance is twenty days."
         ), metadata={"page": 4, "heading": "Page 4", "source": "policy.pdf#page-4"})
         chunks = chunk_pages([page])
-        self.assertEqual(chunks[0].page_content, "Preamble stays.")
-        refund_chunks = [c for c in chunks if c.metadata.get("header_2") == "Refunds"]
+        self.assertEqual(chunks[0].page_content, "章節：Document\nPreamble stays.")
+        refund_chunks = [c for c in chunks if c.metadata.get("heading1") == "Refunds"]
         self.assertGreater(len(refund_chunks), 1)
-        self.assertTrue(all(c.metadata["heading"] == "Policy > Refunds" for c in refund_chunks))
+        self.assertTrue(all(c.metadata["heading1"] == "Refunds" for c in refund_chunks))
         self.assertTrue(all("Holiday allowance" not in c.page_content for c in refund_chunks))
-        self.assertEqual(chunks[-1].metadata["heading"], "Policy > Holidays")
+        self.assertEqual(chunks[-1].metadata["heading1"], "Holidays")
         self.assertTrue(all(c.metadata["page"] == 4 for c in chunks))
         self.assertTrue(all(len(c.page_content) <= 1000 for c in chunks))
 
@@ -233,12 +233,12 @@ class PdfUploadTests(unittest.TestCase):
             (2, "Submit your receipt.\n\n## Holidays\n\nTwenty days per year."),
         ]]
         chunks = chunk_pages(pages)
-        refund = next(c for c in chunks if c.metadata.get("header_2") == "Refunds")
+        refund = next(c for c in chunks if c.metadata.get("heading1") == "Refunds")
         self.assertIn("Submit your receipt.", refund.page_content)
-        self.assertEqual(refund.metadata["heading"], "Policy > Refunds")
+        self.assertEqual(refund.metadata["heading1"], "Refunds")
         self.assertEqual(refund.metadata["pages"], [1, 2])
         self.assertEqual(refund.metadata["source"], "policy.pdf#abc-page-1-2")
-        holiday = next(c for c in chunks if c.metadata.get("header_2") == "Holidays")
+        holiday = next(c for c in chunks if c.metadata.get("heading1") == "Holidays")
         self.assertEqual(holiday.metadata["pages"], [2])
         self.assertNotIn("Submit your receipt.", holiday.page_content)
         self.assertTrue(all("PDF_PAGE_" not in c.page_content for c in chunks))
@@ -253,7 +253,7 @@ class PdfUploadTests(unittest.TestCase):
         ]]
         chunks = chunk_pages(pages)
         self.assertGreater(len(chunks), 2)
-        self.assertTrue(all(c.metadata["heading"] == "Refunds" for c in chunks))
+        self.assertTrue(all(c.metadata["heading1"] == "Refunds" for c in chunks))
         self.assertTrue(all(c.metadata["section_index"] == 0 for c in chunks))
         self.assertEqual(chunks[0].metadata["pages"], [1])
         self.assertEqual(chunks[-1].metadata["pages"], [3])
@@ -267,7 +267,7 @@ class PdfUploadTests(unittest.TestCase):
         chunks = chunk_pages(pages)
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0].metadata["pages"], [1, 2])
-        self.assertEqual(chunks[0].metadata["heading"], "Document")
+        self.assertEqual(chunks[0].metadata["heading1"], "Document")
 
     def test_docling_headings_are_split_and_persisted(self):
         data = pdf_bytes(["# Company Policies\n\n## Refund Rules\n\nRefunds take seven days."
@@ -283,8 +283,8 @@ class PdfUploadTests(unittest.TestCase):
         self.assertIn("# Company Policies", markdown)
         self.assertIn("## Refund Rules", markdown)
         chunks = list(indexer.vectorstore.docstore._dict.values())
-        self.assertTrue(any(c.metadata["heading"] == "Company Policies > Refund Rules" for c in chunks))
-        self.assertTrue(any(c.metadata["heading"] == "Company Policies > Holiday Rules" for c in chunks))
+        self.assertTrue(any(c.metadata["heading1"] == "Refund Rules" for c in chunks))
+        self.assertTrue(any(c.metadata["heading1"] == "Holiday Rules" for c in chunks))
         counts = indexer.build_index(self.docs)
         self.assertEqual(counts, (0, 0))  # docs/pdf exports are excluded.
         self.assertIsNone(indexer.vectorstore)
@@ -299,7 +299,8 @@ class PdfUploadTests(unittest.TestCase):
                 "~~~\n六、範例\n~~~\n七、附則")
         expected = text.replace("\n一、", "\n## 一、").replace(
             "\n  十一、", "\n## 十一、").replace(
-            "\n二十六、", "\n## 二十六、").replace("\n七、", "\n## 七、")
+            "\n二十六、", "\n## 二十六、").replace("\n七、", "\n## 七、").replace(
+            "\n（一）", "\n- （一）")
         self.assertEqual(fix_taiwan_law_headings(text), expected)
         self.assertEqual(fix_taiwan_law_headings(expected), expected)
 
@@ -315,7 +316,7 @@ class PdfUploadTests(unittest.TestCase):
         pages = json.loads((artifact / "markdown_pages.json").read_text())
         self.assertIn("\n## 十一、評審基準", pages[0]["page_content"])
         chunks = json.loads((artifact / "chunks.json").read_text())
-        headings = [c["metadata"].get("header_2") for c in chunks]
+        headings = [c["metadata"].get("heading1") for c in chunks]
         self.assertIn("一、目的", headings)
         self.assertIn("十一、評審基準", headings)
         self.assertTrue(all(c["metadata"]["page"] == 1 for c in chunks))
@@ -336,6 +337,108 @@ class PdfUploadTests(unittest.TestCase):
             self.assertEqual(fix_taiwan_law_headings(expected), expected)
         code = "```markdown\n### 十一、範例\n```"
         self.assertEqual(fix_taiwan_law_headings(code), code)
+
+    def test_chinese_items_cross_pages_and_keep_continuations(self):
+        pages = [Document(page_content=fix_taiwan_law_headings(text), metadata={
+            "page": number, "source": f"law.pdf#abc-page-{number}",
+        }) for number, text in [
+            (1, "二、申請資格\n\n（一）申請人須年滿十八歲。\n\n提供證明。\n- 身分證\n- 護照"),
+            (2, "補充資料。\n\n(二)須符合居住條件。\n\n（三）其他資格。\n\n三、附則\n\n結束。"),
+        ]]
+        chunks = chunk_pages(pages)
+        items = [c for c in chunks if c.page_content.split("\n", 1)[1].startswith(("- （", "- ("))]
+        self.assertEqual(len(items), 3)
+        self.assertIn("提供證明。", items[0].page_content)
+        self.assertIn("- 身分證", items[0].page_content)
+        self.assertIn("補充資料。", items[0].page_content)
+        self.assertEqual(items[0].metadata["pages"], [1, 2])
+        self.assertEqual(items[1].metadata["pages"], [2])
+        self.assertTrue(all(c.metadata["heading1"] == "二、申請資格" for c in items))
+        self.assertNotIn("結束", items[-1].page_content)
+        self.assertNotIn("（三）", items[1].page_content)
+
+    def test_chinese_item_normalization_preserves_code_and_tables(self):
+        text = "### （一）資格\n1. (二)條件\n內文（一）不切分\n| （三）表格 |\n```\n（四）程式\n```"
+        normalized = fix_taiwan_law_headings(text)
+        self.assertEqual(normalized, "- （一）資格\n- (二)條件\n內文（一）不切分\n| （三）表格 |\n```\n（四）程式\n```")
+        self.assertEqual(fix_taiwan_law_headings(normalized), normalized)
+        chunks = chunk_documents([Document(page_content=normalized)])
+        self.assertEqual(len(chunks), 2)
+        self.assertIn("（四）程式", chunks[1].page_content)
+
+    def test_chinese_items_are_atomic_except_embedding_limit(self):
+        text = "- （一）" + "申請資格。" * 60 + "\n\n- （二）短項目。"
+        chunks = chunk_documents([Document(page_content=text)], target_tokens=100)
+        self.assertEqual(len(chunks), 2)
+        self.assertGreater(token_count(chunks[0].page_content), 100)
+        oversized = "- （一）" + "申請資格。" * 2000
+        chunks = chunk_documents([Document(page_content=oversized)])
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual("".join(c.page_content.split("\n", 1)[1] for c in chunks), oversized)
+        self.assertTrue(all(token_count(c.page_content) <= 8000 for c in chunks))
+
+    def test_numbered_items_keep_only_enclosing_h2_header(self):
+        text = "# 作業要點\n\n## 二、資格\n\n### 細節\n\n(一)第一項。\n\n補充。\n\n(二)第二項。"
+        page = Document(page_content=text, metadata={
+            "page": 1, "source": "law.pdf#abc-page-1",
+        })
+        markdown_path = self.docs / "law.md"
+        markdown_path.write_text(text, encoding="utf-8")
+        for chunks in (chunk_pages([page]),
+                       chunk_documents(indexer.load_markdown_sections(markdown_path))):
+            items = [c for c in chunks if c.page_content.split("\n", 1)[1].startswith("(")]
+            self.assertEqual(len(items), 2)
+            self.assertIn("補充。", items[0].page_content)
+            for item in items:
+                self.assertEqual(item.metadata["heading1"], "二、資格")
+                self.assertTrue(item.page_content.startswith("章節：二、資格\n("))
+                self.assertEqual({k: v for k, v in item.metadata.items()
+                                  if k.startswith("header_") or k == "heading"}, {})
+
+    def test_heading_is_in_actual_embedding_input_and_saved_chunks(self):
+        markdown = "# 作業要點\n\n## 八、管考查核\n\n(一)應接受輔導。\n\n(二)應提供報告。"
+        self.converter.convert.side_effect = lambda *args, **kwargs: SimpleNamespace(
+            status="success", document=SimpleNamespace(export_to_markdown=lambda **kwargs: markdown))
+        embeddings = LocalEmbeddings()
+        with patch.object(embeddings, "embed_documents", wraps=embeddings.embed_documents) as embed:
+            with patch.object(indexer, "get_embeddings", return_value=embeddings):
+                response = self.upload(pdf_bytes(["Law document"]))
+                self.assertEqual(response.status_code, 200, response.text)
+                artifact = indexer.DOCUMENTS_DIR / response.json()["document_id"]
+                saved = json.loads((artifact / "chunks.json").read_text())
+                self.assertEqual(embed.call_args.args[0], [chunk["content"] for chunk in saved])
+                self.assertIn("章節：八、管考查核\n- (一)應接受輔導。", embed.call_args.args[0])
+                embed.reset_mock()
+                (self.docs / "law.md").write_text(markdown, encoding="utf-8")
+                indexer.build_index(self.docs)
+                manifest = indexer.chunk_manifest()
+                self.assertEqual(embed.call_args.args[0], [chunk["content"] for chunk in manifest])
+                self.assertIn("章節：八、管考查核\n(二)應提供報告。", embed.call_args.args[0])
+        for chunk in saved + manifest:
+            self.assertIn("heading1", chunk["metadata"])
+            self.assertNotIn("heading", chunk["metadata"])
+            self.assertFalse(any(key.startswith("header_") for key in chunk["metadata"]))
+
+    def test_large_item_reserves_embedding_space_for_heading(self):
+        title = "八、受補助單位應配合輔導及查核"
+        text = "(一)" + "申請資格。" * 2000
+        chunks = chunk_documents([Document(page_content=text, metadata={"heading1": title})])
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual("".join(c.page_content.split("\n", 1)[1] for c in chunks), text)
+        self.assertTrue(all(c.page_content.startswith(f"章節：{title}\n") for c in chunks))
+        self.assertTrue(all(token_count(c.page_content) <= 8000 for c in chunks))
+
+    def test_chinese_items_are_persisted_as_markdown_lists(self):
+        markdown = "二、資格\n\n（一）第一項。\n\n（二）第二項。"
+        self.converter.convert.side_effect = lambda *args, **kwargs: SimpleNamespace(
+            status="success", document=SimpleNamespace(export_to_markdown=lambda **kwargs: markdown))
+        response = self.upload(pdf_bytes(["Law document"]))
+        self.assertEqual(response.status_code, 200, response.text)
+        artifact = indexer.DOCUMENTS_DIR / response.json()["document_id"]
+        self.assertIn("- （一）第一項。", (artifact / "document.md").read_text())
+        chunks = json.loads((artifact / "chunks.json").read_text())
+        items = [c for c in chunks if c["content"].split("\n", 1)[1].startswith("- （")]
+        self.assertEqual(len(items), 2)
 
     def test_docling_failure_does_not_publish_partial_content(self):
         self.converter.convert.side_effect = None
@@ -358,7 +461,7 @@ class PdfUploadTests(unittest.TestCase):
         self.assertTrue(all(len(chunk.page_content) <= 1000 for chunk in chunks))
         self.assertTrue(all(chunk.metadata["page"] == 1 for chunk in chunks))
         self.assertTrue(any(
-            chunks[0].page_content[-size:] == chunks[1].page_content[:size]
+            chunks[0].page_content[-size:] == chunks[1].page_content.split("\n", 1)[1][:size]
             for size in range(20, 151)
         ))
 
@@ -379,7 +482,7 @@ class PdfUploadTests(unittest.TestCase):
                             for chunk in chunks))
         self.assertFalse(any("| 費用 | 條件 |\n| --- | --- |\n| 停車費 |" in chunk.page_content
                            and "| 符合資格 |" not in chunk.page_content for chunk in chunks))
-        self.assertTrue(all(chunk.metadata["heading"] == "退費規定" for chunk in chunks))
+        self.assertTrue(all(chunk.metadata["heading1"] == "退費規定" for chunk in chunks))
         self.assertTrue(all(chunk.metadata["page"] == 2 for chunk in chunks))
         self.assertEqual([chunk.metadata["chunk_index"] for chunk in chunks], list(range(len(chunks))))
         self.assertTrue(all(token_count(chunk.page_content) <= 600 for chunk in chunks))

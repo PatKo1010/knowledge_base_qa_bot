@@ -54,7 +54,7 @@ def sse_event(event: str, data: dict) -> str:
 def build_prompt(query: str, ranked_chunks: list) -> str:
     context = "\n\n".join(
         f"[Source: {doc.metadata.get('source', 'unknown')}]\n"
-        f"Heading path: {doc.metadata.get('heading', 'unknown')}\n\n"
+        f"Heading: {doc.metadata.get('heading1', doc.metadata.get('heading', 'unknown'))}\n\n"
         f"{doc.page_content}"
         for doc, _score in ranked_chunks
     )
@@ -65,7 +65,7 @@ def build_sources(ranked_chunks: list) -> list[dict]:
     return [
         {
             "source": doc.metadata.get("source", "unknown"),
-            "heading": doc.metadata.get("heading", "unknown"),
+            "heading": doc.metadata.get("heading1", doc.metadata.get("heading", "unknown")),
             "score": round(float(score), 3),
             "content": doc.page_content[:240],
         }
